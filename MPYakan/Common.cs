@@ -1,16 +1,14 @@
 ﻿using System;
+using Microsoft.Extensions.Configuration;
 
 namespace MPYakan
 {
-    internal class Common
+    public class Common
     {
         // プログラムタイトル
         public static readonly string PROGRAM_TITLE = "[KMD015SC] 切削夜間バッチ";
         public static readonly string PROGRAM_NAME = "MP-Yakan";
         public static readonly string PROGRAM_VERSION = "260429.01";
-
-        // 定義情報
-        public static readonly string APP_SETTING_FILE = "appsettings.json";
 
         // メッセージ定義
         public static readonly int MSG_PAD = 6;
@@ -28,6 +26,54 @@ namespace MPYakan
 
         public static readonly string MSG_PROGRAM_ERROR = "プログラムの想定エラーが発生しました";
 
+
+        // 設定ファイル関連
+        public const string APP_SETTING_FILE = "appsettings.json";
+
+        public class EmConfig
+        {
+            public string HOST { get; set; } = "";
+            public string USER { get; set; } = "";
+            public string PASS { get; set; } = "";
+            public string SCHEMA { get; set; } = "";
+        }
+
+        public class MpConfig
+        {
+            public string SERVER { get; set; } = "";
+            public string PORT { get; set; } = "";
+            public string USER { get; set; } = "";
+            public string PASS { get; set; } = "";
+            public string SCHEMA { get; set; } = "";
+        }
+
+        public class AppConfig
+        {
+            public EmConfig EmConfig { get; set; } = new();
+            public MpConfig MpConfig { get; set; } = new();
+        }
+
+        public static AppConfig LoadConfig()
+        {
+            string filePath = Path.Combine(AppContext.BaseDirectory, APP_SETTING_FILE);
+
+            if (!File.Exists(filePath))
+            {
+                Console.WriteLine($"設定ファイル[{APP_SETTING_FILE}]が見つかりません．");
+                Environment.Exit(9);
+            }
+
+            var config = new ConfigurationBuilder()
+                .SetBasePath(AppContext.BaseDirectory)
+                .AddJsonFile(APP_SETTING_FILE, optional: false, reloadOnChange: true)
+                .Build();
+
+            var appConfig = new AppConfig();
+            config.GetSection("EmConfig").Bind(appConfig.EmConfig);
+            config.GetSection("MpConfig").Bind(appConfig.MpConfig);
+
+            return appConfig;
+        }
     }
 
     public static class ParseExtensions

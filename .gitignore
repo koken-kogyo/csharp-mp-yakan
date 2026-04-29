@@ -10,7 +10,6 @@
 *.userosscache
 *.sln.docstates
 *.log
-appsettings.json
 
 # Build results
 [Bb]in/

@@ -12,14 +12,14 @@ namespace MPYakan
         /// </summary>
         /// <param name="oraCnn">EM データベースへの接続クラス</param>
         /// <returns>結果 (false: 失敗, true: 成功)</returns>
-        public static bool IsConnectOraSchema(ref OracleConnection? emCnn, IConfiguration config)
+        public static bool IsConnectOraSchema(ref OracleConnection? emCnn, Common.EmConfig emConfig)
         {
             bool ret = false;
 
             // appsettings.json からデータベース情報を読み込む
-            string? userid = config["EMUSER"];
-            string? encpassed = config["EMPASS"];
-            string? host = config["EMHOST"];
+            string userid = emConfig.USER;
+            string encpassed = emConfig.PASS;
+            string host = emConfig.HOST;
             string sid = "KOKEN";
 
             // パスワード復号化
@@ -119,26 +119,31 @@ namespace MPYakan
         }
 
 
-        public static bool GetS0820YMD(string? emSchema, ref OracleConnection? emCnn, ref DataTable calendarDt)
+        public static bool GetYMD(string? emSchema, ref OracleConnection? emCnn, ref DataTable calendarDt, ref DataTable controlDt)
         {
             bool ret = false;
             try
             {
-                // SQL 構文を編集
-                string sql = "select YMD from " + emSchema + ".S0820 "
-                           + "where CALTYP = '00001' and WKKBN = '1' "
-                           + "and YMD between ADD_MONTHS(SYSDATE, -1) and ADD_MONTHS(SYSDATE, 1) "
-                           ;
-                // 検索
-                using (OracleCommand myCmd = new(sql, emCnn))
+                // カレンダーマスタ
+                string sql1 = 
+                    "select YMD from " + emSchema + ".S0820 " +
+                    "where CALTYP = '00001' and WKKBN = '1' " +
+                    "and YMD between ADD_MONTHS(SYSDATE, -1) and ADD_MONTHS(SYSDATE, 2)";
+                using OracleDataAdapter myDa1 = new(new OracleCommand(sql1, emCnn));
                 {
-                    using OracleDataAdapter myDa = new(myCmd);
-                    using DataTable myDt = new();
-                    // 結果取得
-                    myDa.Fill(myDt);
-                    calendarDt = myDt;
+                    myDa1.Fill(calendarDt);
                 }
-                ret = calendarDt.Rows.Count > 0;
+                // 手配先管理期間マスタ[60600]
+                string sql2 = "select " +
+                    "ZKTSTDT as 前回確定開始日, ZKTEDDT as 前回確定終了日, " +
+                    "KKTSTDT as 今回確定開始日, KKTEDDT as 今回確定終了日 " +
+                    "from " + emSchema + ".M0340 " +
+                    "where ODCTLNO='60600'";
+                using OracleDataAdapter myDa2 = new(new OracleCommand(sql2, emCnn));
+                {
+                    myDa2.Fill(controlDt);
+                }
+                ret = calendarDt.Rows.Count > 0 && controlDt.Rows.Count > 0;
             }
             catch (Exception ex)
             {

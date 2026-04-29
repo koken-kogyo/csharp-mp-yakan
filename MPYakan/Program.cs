@@ -1,7 +1,6 @@
 ﻿using Oracle.ManagedDataAccess.Client;
 using MySql.Data.MySqlClient;
 using System.Data;
-using Microsoft.Extensions.Configuration;
 
 namespace MPYakan
 {
@@ -12,6 +11,7 @@ namespace MPYakan
         private static MySqlConnection? mpCnn;
         // 各種データテーブル
         private static DataTable calendarDt = new();
+        private static DataTable controlDt = new();
         private static DataTable emDt = new();
         // 変数
         private static bool ret = false;
@@ -20,40 +20,23 @@ namespace MPYakan
         static void Main()
         {
 
-            // 設定ファイルの存在確認
-            if (!File.Exists(Path.Combine(AppContext.BaseDirectory, Common.APP_SETTING_FILE)))
-            {
-                Console.WriteLine($"設定ファイル[{Common.APP_SETTING_FILE}]が見つかりません．");
-                Environment.Exit(9);
-            }
-
-            // 設定ファイルの読み込み
-            var config = new ConfigurationBuilder()
-                .SetBasePath(AppContext.BaseDirectory)
-                .AddJsonFile(Common.APP_SETTING_FILE, optional: false, reloadOnChange: true)
-                .Build();
-            string? emSchema = config["EMSCHEMA"];
-            string? mpSchema = config["MPSCHEMA"];
+            // 初期化処理（事前準備）
+            Common.AppConfig config = Common.LoadConfig();
+            string emSchema = config.EmConfig.SCHEMA;
+            string mpSchema = config.MpConfig.SCHEMA;
             Console.WriteLine($"EM[{emSchema}] -> MP[{mpSchema}]");
 
-            // 設定ファイルの中身確認
-            if ( string.IsNullOrEmpty( emSchema ) || string.IsNullOrEmpty( emSchema ))
-            {
-                Console.WriteLine($"設定ファイル[{Common.APP_SETTING_FILE}]の中身を確認してください．");
-                Environment.Exit(9);
-            }
-
             // EMデータベースコネクション開始
-            if (!DBManager_Oracle.IsConnectOraSchema(ref emCnn, config))
+            if (!DBManager_Oracle.IsConnectOraSchema(ref emCnn, config.EmConfig))
             {
                 Console.WriteLine("EM接続に失敗しました．");
                 Environment.Exit(9);
             }
 
-            // カレンダーマスタの読み込み
-            if (!DBManager_Oracle.GetS0820YMD(emSchema, ref emCnn, ref calendarDt))
+            // カレンダーマスタ（前１か月、後２か月）と手配先管理期間マスタ[60600]の読み込み
+            if (!DBManager_Oracle.GetYMD(emSchema, ref emCnn, ref calendarDt, ref controlDt))
             {
-                Console.WriteLine("カレンダー取得で異常が発生しました．");
+                Console.WriteLine("マスタ取得で異常が発生しました．");
                 Environment.Exit(9);
             }
 
@@ -70,14 +53,14 @@ namespace MPYakan
 
 
             // MPデータベースコネクション開始
-            if (!DBManager_MySQL.IsConnectOraSchema(ref mpCnn, config))
+            if (!DBManager_MySQL.IsConnectOraSchema(ref mpCnn, config.MpConfig))
             {
                 Console.WriteLine("MP接続に失敗しました．");
                 Environment.Exit(9);
             }
 
             // ①EMで実績計上された手配状態等を切削システムに取り込む
-            // （MPPPSの処理と同じにする事！）
+            // （MPPPSソースとロジックが2か所となるので編集する際は、同じにする事！）
             Console.WriteLine(Common.MSG_SEPARATOR);
             Console.WriteLine("EM ステータス 取込処理開始");
             Console.WriteLine(Common.MSG_SEPARATOR);
@@ -94,14 +77,13 @@ namespace MPYakan
 
 
             // ②生産ダッシュボード処理
-            // kd8490:切削手配遅れファイルの作成
             Console.WriteLine(Common.MSG_SEPARATOR);
             Console.WriteLine("生産ダッシュボード処理 [kd8490：切削手配遅れファイル]");
             Console.WriteLine(Common.MSG_SEPARATOR);
             int insertCnt = DBManager_MySQL.BackupBehindSchedule(mpSchema, ref mpCnn);
             if (insertCnt < 0)
             {
-                "生産ダッシュボード処理で異常が発生しました．".ConsoleWriteLinePadded();
+                "切削手配遅れファイル作成で異常が発生しました．（処理は続行します）".ConsoleWriteLinePadded();
             }
 
 
@@ -109,14 +91,21 @@ namespace MPYakan
             Console.WriteLine(Common.MSG_SEPARATOR);
             Console.WriteLine("注文ダッシュボード処理 [kd8510：切削オーダー集計ファイル]");
             Console.WriteLine(Common.MSG_SEPARATOR);
-
-            // kd8510:切削オーダー集計ファイルの作成
-            ret = DBManager_MySQL.HowManyOrders(mpSchema, ref mpCnn, ref calendarDt);
+            ret = DBManager_MySQL.HowManyOrders(mpSchema, ref mpCnn, ref calendarDt, ref controlDt);
             if (!ret)
-                "切削オーダー集計処理に失敗しましたが処理は続行します．".ConsoleWriteLinePadded();
+                "切削オーダー集計処理で異常が発生しました．（処理は続行します）".ConsoleWriteLinePadded();
 
 
-            // 実績集計（月ごとの実績数などダッシュボードで表示すべきデータを集計）
+            // ④見込み生産処理
+            Console.WriteLine(Common.MSG_SEPARATOR);
+            Console.WriteLine("見込み生産処理 [kd8500：見込生産管理ファイル]");
+            Console.WriteLine(Common.MSG_SEPARATOR);
+            ret = DBManager_MySQL.Plan2Order(mpSchema, ref mpCnn, ref calendarDt);
+            if (!ret)
+            {
+                "見込生産処理で異常が発生しました．".ConsoleWriteLinePadded();
+            }
+
 
 
             // コネクションの削除

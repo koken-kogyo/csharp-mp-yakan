@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.7" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.7" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.7" />
     <PackageReference Include="MySql.Data" Version="9.7.0" />
     <PackageReference Include="Oracle.ManagedDataAccess.Core" Version="23.26.200" />
@@ -16,7 +17,7 @@
 
   <ItemGroup>
     <Reference Include="DecryptPassword">
-      <HintPath>..\..\DecryptPassword\DecryptPassword\bin\Debug\DecryptPassword.dll</HintPath>
+      <HintPath>..\..\DecryptPassword\DecryptPassword.dll</HintPath>
     </Reference>
   </ItemGroup>
 
