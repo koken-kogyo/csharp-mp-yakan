@@ -1,6 +1,7 @@
 ﻿using Oracle.ManagedDataAccess.Client;
 using MySql.Data.MySqlClient;
 using System.Data;
+using System.Diagnostics;
 
 namespace MPYakan
 {
@@ -9,6 +10,8 @@ namespace MPYakan
         // データベースコネクション
         private static OracleConnection? emCnn;
         private static MySqlConnection? mpCnn;
+        private static string? emSchema;
+        private static string? mpSchema;
         // 各種データテーブル
         private static DataTable calendarDt = new();
         private static DataTable controlDt = new();
@@ -22,8 +25,8 @@ namespace MPYakan
 
             // 初期化処理（事前準備）
             Common.AppConfig config = Common.LoadConfig();
-            string emSchema = config.EmConfig.SCHEMA;
-            string mpSchema = config.MpConfig.SCHEMA;
+            emSchema = config.EmConfig.SCHEMA;
+            mpSchema = config.MpConfig.SCHEMA;
             Console.WriteLine($"EM[{emSchema}] -> MP[{mpSchema}]");
 
             // EMデータベースコネクション開始
@@ -33,7 +36,8 @@ namespace MPYakan
                 Environment.Exit(9);
             }
 
-            // カレンダーマスタ（前１か月、後２か月）と手配先管理期間マスタ[60600]の読み込み
+            // カレンダーマスタ（前１か月、後２か月）読み込み
+            // 手配先管理期間マスタ[KEY=60600]の読み込み
             if (!DBManager_Oracle.GetYMD(emSchema, ref emCnn, ref calendarDt, ref controlDt))
             {
                 Console.WriteLine("マスタ取得で異常が発生しました．");
@@ -46,9 +50,6 @@ namespace MPYakan
                 Console.WriteLine("EMデータベース異常が発生しました．");
                 Environment.Exit(9);
             }
-
-            // EMデータベースコネクション終了
-            DBManager_Oracle.CloseOraSchema(ref emCnn);
 
 
 
@@ -70,10 +71,14 @@ namespace MPYakan
                 "ステータス更新で異常が発生しました．".ConsoleWriteLinePadded();
                 Environment.Exit(9);
             }
-            if (updateCnt == 0)
+            else if (updateCnt == 0)
+            {
                 "EMステータスの更新はありませんでした．".ConsoleWriteLinePadded();
-            if (updateCnt > 0)
+            }
+            else
+            {
                 $"EM実績 {updateCnt:#,0}件を取り込み、同期をとりました．".ConsoleWriteLinePadded();
+            }
 
 
             // ②生産ダッシュボード処理
@@ -93,22 +98,36 @@ namespace MPYakan
             Console.WriteLine(Common.MSG_SEPARATOR);
             ret = DBManager_MySQL.HowManyOrders(mpSchema, ref mpCnn, ref calendarDt, ref controlDt);
             if (!ret)
-                "切削オーダー集計処理で異常が発生しました．（処理は続行します）".ConsoleWriteLinePadded();
-
-
-            // ④見込み生産処理
-            Console.WriteLine(Common.MSG_SEPARATOR);
-            Console.WriteLine("見込み生産処理 [kd8500：見込生産管理ファイル]");
-            Console.WriteLine(Common.MSG_SEPARATOR);
-            ret = DBManager_MySQL.Plan2Order(mpSchema, ref mpCnn, ref calendarDt);
-            if (!ret)
             {
-                "見込生産処理で異常が発生しました．".ConsoleWriteLinePadded();
+                "切削オーダー集計処理で異常が発生しました．（処理は続行します）".ConsoleWriteLinePadded();
             }
 
 
+            // ④内示生産処理
+            var sw = Stopwatch.StartNew();
+            Console.WriteLine(Common.MSG_SEPARATOR);
+            Console.WriteLine("内示生産処理 [kd8500：内示生産管理ファイル]");
+            Console.WriteLine(Common.MSG_SEPARATOR);
+            int 内示更新件数 = 内示生産処理();
+            if (内示更新件数 < 0)
+            {
+                "内示生産処理で異常が発生しました．".ConsoleWriteLinePadded();
+            }
+            else if (内示更新件数 == 0)
+            {
+                "内示生産処理の更新はありませんでした．".ConsoleWriteLinePadded();
+            }
+            else
+            {
+                $"内示生産管理ファイルを {内示更新件数:#,0} 件更新しました．".ConsoleWriteLinePadded();
+            }
+            sw.Stop();
+            $"処理時間: {sw.ElapsedMilliseconds} ms".ConsoleWriteLinePadded();
 
-            // コネクションの削除
+
+
+            // データベースコネクションの削除
+            DBManager_Oracle.CloseOraSchema(ref emCnn);
             DBManager_MySQL.CloseMySqlSchema(ref mpCnn);
 
             // 終わり
@@ -116,6 +135,121 @@ namespace MPYakan
 
         }
 
+
+
+        // ④内示生産処理
+        private static int 内示生産処理()
+        {
+            DataTable KM8435 = new();
+            DataTable KD8500 = new();
+            int insertCnt = 0;
+            int updateCnt = 0;
+
+            // ①共通部品マスタを取得
+            if (!DBManager_MySQL.ReadKM8435(emSchema, ref mpCnn, ref KM8435))
+                return -1;
+
+            // ②内示生産管理ファイルを取得
+            if (!DBManager_MySQL.ReadKD8500(mpSchema, ref mpCnn, ref KD8500))
+                return -1;
+
+            // ③対象の内示受注ファイル検索と集計した結果を取得
+            DataTable targetDt = new();
+            bool flg = DBManager_Oracle.GetD0030Target(emSchema, ref emCnn, ref KD8500, ref KM8435, ref targetDt);
+            if (targetDt.Rows.Count == 0) return 0;
+
+            // ④採番
+            string odrno = DBManager_MySQL.GetLastOrderNo(mpSchema, ref mpCnn); // YYMM000000
+            if (odrno == "") return -1;
+            string yymm = odrno[..4];
+            int seq = int.Parse(odrno.Substring(4, 6));
+
+            // トランザクション開始
+            if (mpCnn == null)
+            {
+                Console.WriteLine("MPコネクションが確立されていません．");
+                return -1;
+            }
+            MySqlTransaction transaction = mpCnn.BeginTransaction()!;
+            try
+            {
+                foreach (DataRow row in targetDt.Rows)
+                {
+                    string hmcd = (string)row["HMCD"];
+                    string targetyymm = (string)row["TARGETYYMM"];
+                    int yyyy = int.Parse(targetyymm[..4]);
+                    int mm = int.Parse(targetyymm.Substring(5, 2));
+                    decimal qty = (decimal)row["JUQTY"];
+                    var r = KD8500.AsEnumerable()
+                        .FirstOrDefault(r =>
+                            r.Field<string>("MCGCD") == "XT" &&
+                            r.Field<string>("HMCD") == hmcd &&
+                            r.Field<int>("YYYY") == yyyy
+                            );
+                    string lastyymm = "1900/01";
+                    decimal lastqty = 0;
+                    string productkbn = "";
+                    if (r != null)
+                    {
+                        lastqty = Convert.ToDecimal(r["LASTQTY"]);
+                        lastyymm = r.Field<string>("LASTYYMM") ?? "1900/01";
+                        productkbn = r.Field<string>("PDTKBN") ?? "1";
+                        if (lastyymm == targetyymm && lastqty == qty) continue; // 前回内示から変化なしの場合次の品番へ
+                        r["LASTDT"] = row["LASTDT"];                // 前回登録日時
+                        r["LASTYYMM"] = targetyymm;                 // 前回対象月
+                        r["LASTQTY"] = qty;                         // 前回内示数
+                        r[$"M{mm:00}"] = qty;                       // 内示数
+                        r["UPDTDT"] = DateTime.Now;                 // 更新日時
+                        updateCnt++;
+                    }
+                    else
+                    {
+                        continue;
+                    }
+
+                    // ⑤内示受注を切削手配ファイルに登録
+                    seq++;
+                    string newOdrno = $"{yymm}{seq:000000}";
+                    if (DBManager_MySQL.InsertKD8430KD8450(mpSchema, ref mpCnn, row, newOdrno, targetyymm, lastyymm, lastqty, productkbn))
+                    {
+                        insertCnt++;
+                    }
+                    /*
+
+                    （追加機能予定）
+                    　生産区分が「２：内示平準」の場合、内示数を４週に分割して週の初めに登録
+
+                    */
+
+
+                }
+                // ⑥内示生産管理ファイルを更新
+                if (updateCnt > 0)
+                {
+                    int cnt = DBManager_MySQL.UpdateKD8500(mpSchema, ref mpCnn, ref KD8500);
+                    if (cnt != updateCnt) throw new Exception($"データベースの更新件数に差異:{cnt}:{updateCnt}");
+                }
+
+                // トランザクション終了
+                transaction.Commit();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("内示生産処理で例外が発生しました．" + ex.Message);
+                try
+                {
+                    transaction.Rollback();
+                    Console.WriteLine("トランザクションをロールバックしました．");
+                }
+                catch (Exception rollBackEx)
+                {
+                    Console.WriteLine("トランザクションのロールバックに失敗しました．" + rollBackEx.Message);
+                }
+                return -1;
+            }
+
+            return updateCnt;
+        }
 
         // Oracle Sample
         private static void OracleSample()
@@ -159,7 +293,7 @@ namespace MPYakan
                 using MySqlConnection conn = new(ConnectionString);
                 conn.Open();
                 using MySqlCommand cmd = new(sql, conn);
-                using var reader = cmd.ExecuteReader();
+                using MySqlDataReader reader = cmd.ExecuteReader();
                 while (reader.Read())
                 {
                     Console.WriteLine(reader["DEPTCD"] + ":"

@@ -135,8 +135,8 @@ namespace MPYakan
                 }
                 // 手配先管理期間マスタ[60600]
                 string sql2 = "select " +
-                    "ZKTSTDT as 前回確定開始日, ZKTEDDT as 前回確定終了日, " +
-                    "KKTSTDT as 今回確定開始日, KKTEDDT as 今回確定終了日 " +
+                    "ZKTSTDT as 前回確定開始日, ZKTEDDT as 前回確定終了日, ZKTODDT as 前回確定作成日, " +
+                    "KKTSTDT as 今回確定開始日, KKTEDDT as 今回確定終了日, KKTODDT as 今回確定作成日 " +
                     "from " + emSchema + ".M0340 " +
                     "where ODCTLNO='60600'";
                 using OracleDataAdapter myDa2 = new(new OracleCommand(sql2, emCnn));
@@ -150,6 +150,118 @@ namespace MPYakan
                 Console.WriteLine(ex.Message);
             }
             return ret;
+        }
+
+        /// <summary>
+        /// 内示受注ファイルに新規登録があった品番を取得
+        /// 　ループ中に１件ずつSQLを投げていたらパフォーマンスが悪かったので、
+        /// 　SQL１発で集計出来る方式に変更
+        /// </summary>
+        /// <param name="emDt">注文情報データ</param>
+        /// <returns>注文情報データ</returns>
+        public static bool GetD0030Target(string? emSchema, ref OracleConnection? emCnn, ref DataTable kd8500, ref DataTable km8435, ref DataTable targetDt)
+        {
+            if (emCnn is null || emCnn.State != ConnectionState.Open)
+            {
+                "Oracle 接続が確立されていません．".ConsoleWriteLinePadded();
+                return false;
+            }
+
+            // ①共通部品を展開したパーツリストを作成
+            var partsList = new List<(string HmCd, string? Part, string? OyaKbn, DateTime LastDt)>();
+            foreach (DataRow r in kd8500.Rows)
+            {
+                string hmcd = r.Field<string>("HMCD") ?? "";
+                string oyakbn = r.Field<string>("OYAKBN") ?? "0";
+                DateTime lastDt = r["LASTDT"] is DBNull ? new DateTime(1900, 1, 1) : (DateTime)r["LASTDT"];
+
+                var hmcds = km8435.AsEnumerable()
+                    .Where(x => x.Field<string>("HMCD") == hmcd)
+                    .Select(x => x.Field<string>("HMCDS"))
+                    .ToList();
+                if (hmcds.Count > 0)
+                {
+                    foreach (var p in hmcds)
+                        partsList.Add((hmcd, p, oyakbn, lastDt));
+                }
+                else
+                {
+                    partsList.Add((hmcd, hmcd, oyakbn, lastDt));
+                }
+            }
+            var partsValue = string.Join(" UNION ALL ",
+                partsList.Select(x =>
+                    $"SELECT '{x.HmCd}' AS HMCD,'{x.Part}' AS PART,TO_DATE('{x.LastDt:yyyy-MM-dd HH:mm:ss}', 'YYYY-MM-DD HH24:MI:SS') AS LASTDT FROM DUAL"
+                )
+            );
+
+            // ②「構成親区分が"0"」のリストを作成
+            var bomValue = "select * from V_BOM_LEAF_PARENT where KOHMCD in (" +
+                string.Join(",", partsList.Where(x => x.OyaKbn == "0").Select(x => $"'{x.Part}'")) + ") ";
+
+            // ③「構成親区分が"1"」のリストを作成
+            var oyaValue = string.Join(" ",
+                partsList.Where(x => x.OyaKbn == "1").Select(x => $"UNION SELECT '{x.HmCd}','{x.HmCd}' FROM DUAL"));
+
+            // ④集計SQL生成
+            // 　C3001：ティエラと、C2105：ﾔﾝﾏｰ塚口は再来月の内示しかなさげ
+            var sqlSamary = $@"
+                -- 内示生産管理ファイルを共通部品で展開したリスト（前回登録日時が重要）
+                with VPARTS as (
+                    {partsValue}
+                ), 
+                -- 出荷品番に変換(VBOM) v.KOHMCD > v.OYAHMCD
+                VBOM as
+                (
+                    {bomValue}{oyaValue}
+                )
+                select p.HMCD,max(d30.INSTDT) as LASTDT,
+                    case when to_number(to_char(SYSDATE,'DD'))<15
+                        then case when d30.TKCD not in ('C3001','C2105') 
+                            then to_char(SYSDATE,'YYYY/MM')
+                            else to_char(add_months(SYSDATE,1),'YYYY/MM') end
+                        else case when d30.TKCD not in ('C3001','C2105') 
+                            then to_char(add_months(SYSDATE,1),'YYYY/MM')
+                            else to_char(add_months(SYSDATE,2),'YYYY/MM') end
+                    end as TARGETYYMM, 
+                    min(d30.JUDT) as JUDT,
+                    sum(d30.JUQTY) as JUQTY
+                from VBOM v
+                    inner join VPARTS p on p.PART=v.KOHMCD
+                    inner join {emSchema}.D0030 d30 on d30.HMCD=v.OYAHMCD
+                where d30.JUDT between
+                    case when to_number(to_char(SYSDATE,'DD'))<15
+                        then case when d30.TKCD not in ('C3001','C2105') 
+                            then trunc(SYSDATE,'MONTH')
+                            else add_months(trunc(SYSDATE,'MONTH'),1) end
+                        else case when d30.TKCD not in ('C3001','C2105') 
+                            then add_months(trunc(SYSDATE,'MONTH'),1)
+                            else add_months(trunc(SYSDATE,'MONTH'),2) end
+                    end and
+                    case when to_number(to_char(SYSDATE,'DD'))<15
+                        then case when d30.TKCD not in ('C3001','C2105') 
+                            then last_day(SYSDATE)
+                            else last_day(add_months(SYSDATE,1)) end
+                        else case when d30.TKCD not in ('C3001','C2105')
+                            then last_day(add_months(SYSDATE,1))
+                            else last_day(add_months(SYSDATE,2)) end
+                    end
+                    and ((d30.CHK<>'43' AND d30.CHK<>'100') OR d30.CHK IS NULL)
+                group by p.HMCD,
+                    case when to_number(to_char(SYSDATE,'DD'))<15
+                        then case when d30.TKCD not in ('C3001','C2105') 
+                            then to_char(SYSDATE,'YYYY/MM')
+                            else to_char(add_months(SYSDATE,1),'YYYY/MM') end
+                        else case when d30.TKCD not in ('C3001','C2105') 
+                            then to_char(add_months(SYSDATE,1),'YYYY/MM')
+                            else to_char(add_months(SYSDATE,2),'YYYY/MM') end
+                    end
+                having 
+                    max(d30.INSTDT)>max(p.LASTDT)
+            ";
+            targetDt.Load(new OracleCommand(sqlSamary, emCnn).ExecuteReader());
+
+            return true;
         }
 
 

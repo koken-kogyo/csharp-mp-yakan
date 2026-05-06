@@ -440,24 +440,217 @@ namespace MPYakan
         }
 
         /// <summary>
-        /// 見込生産処理
+        /// 共通部品マスタの読み込み
         /// </summary>
-        /// <param name="emDt">EMの手配ファイル</param>
-        /// <returns>終了状態</returns>
-        public static bool Plan2Order(string? mpSchema, ref MySqlConnection? mpCnn, ref DataTable calendarDt)
+        /// <returns></returns>
+        public static bool ReadKM8435(string? mpSchema, ref MySqlConnection? mpCnn, ref DataTable KM8435)
+        {
+            if (mpCnn is null || mpSchema is null)
+            {
+                "MySQL 接続が確立されていません．".ConsoleWriteLinePadded();
+                return false;
+            }
+            using MySqlDataAdapter adapter = new (new MySqlCommand("select * from km8435", mpCnn));
+            adapter.Fill(KM8435);
+            return (KM8435.Rows.Count > 0);
+        }
+
+        /// <summary>
+        /// 内示生産管理ファイルの読み込み
+        /// </summary>
+        /// <returns></returns>
+        public static bool ReadKD8500(string? mpSchema, ref MySqlConnection? mpCnn, ref DataTable KD8500)
+        {
+            if (mpCnn is null || mpSchema is null)
+            {
+                "MySQL 接続が確立されていません．".ConsoleWriteLinePadded();
+                return false;
+            }
+            DateTime d = DateTime.Now;
+            var sql = "select * from kd8500 where concat(MCGCD,HMCD,YYYY) in " +
+                $"(select concat(MCGCD,HMCD,max(YYYY)) from kd8500 where yyyy<={d:yyyy} group by MCGCD,HMCD)";
+            using MySqlDataAdapter adapter = new(new MySqlCommand(sql, mpCnn));
+            adapter.Fill(KD8500);
+            return (KD8500.Rows.Count > 0);
+        }
+
+        /// <summary>
+        /// 内示生産管理ファイルの更新
+        /// </summary>
+        /// <returns></returns>
+        public static int UpdateKD8500(string? mpSchema, ref MySqlConnection? mpCnn, ref DataTable KD8500)
+        {
+            if (mpCnn is null || mpSchema is null)
+            {
+                "MySQL 接続が確立されていません．".ConsoleWriteLinePadded();
+                return -1;
+            }
+            using MySqlDataAdapter adapter = new(new MySqlCommand("select * from kd8500 limit 0", mpCnn));
+            using MySqlCommandBuilder buider = new(adapter);
+            DataTable dt = new();
+            adapter.Fill(dt);
+            return adapter.Update(KD8500);
+        }
+
+        // 最終手配Noを取得
+        public static string GetLastOrderNo(string? mpSchema, ref MySqlConnection? mpCnn)
+        {
+            var sql = @$"
+                select ifnull(max(odrno),
+                    concat(date_format(now() - interval 0 month, '%y'), date_format(now() - interval 0 month, '%m'), '900000')) as odrno
+                from {mpSchema}.kd8430 where odrno between
+                    concat(date_format(now() - interval 0 month, '%y'), date_format(now() - interval 0 month, '%m'), '900000') and
+                    concat(date_format(now() - interval 0 month, '%y'), date_format(now() - interval 0 month, '%m'), '999999')";
+            // Debug用に interval 0 は残しておく（-1でテストは行う）
+            string odrno;
+            using (MySqlCommand cmd = new(sql, mpCnn))
+            {
+                // ExecuteScalar():１件１項目の場合に使用できるメソッド
+                // odrno = cmd.ExecuteScalar().ToString();          // SQLでNULLを潰していて実害ゼロなのに VS がうるさい
+                // odrno = Convert.ToString(cmd.ExecuteScalar());   // (C# 1.0) Convert.ToString は null を空文字に変換してくれる
+                // odrno = cmd.ExecuteScalar()?.ToString() ?? "";   // (C# 6.0) [?.]（null 条件演算子）Visual Studio の波線、実害はなくても精神衛生に悪いんですよね。
+                odrno = cmd.ExecuteScalar().ToString()!;            // (C# 8.0) [! ]（null 許容抑制）null ではないことを明示する演算子
+            }
+            return odrno;
+        }
+
+        /// <summary>
+        /// 見込手配登録処理
+        /// </summary>
+        /// <param name="row">登録データ</param>
+        /// <returns>登録件数</returns>
+        public static bool InsertKD8430KD8450(string? mpSchema, ref MySqlConnection? mpCnn, DataRow row, string newOdrno,
+            string targetyymm, string lastyymm, decimal lastqty, string productkbn)
         {
             bool ret = false;
+            string insertSQL = "";
             try
             {
-                "見込生産処理が完了しました．".ConsoleWriteLinePadded();
+                string hmcd = row["HMCD"].ToString()!;
+                DateTime eddt = (DateTime)row["JUDT"];
+                decimal odrqty = Convert.ToDecimal(row["JUQTY"]);
+
+                // ①品目手順マスタから登録に必要な情報を取得
+                var sql = $@"
+                    select m.KTSEQ, m.KTCD, m.ODCD, m.ODRLT, m.WKNOTE, m.WKCOMMENT
+                        ,KTSU, KT1MCGCD, KT1MCCD, KT2MCGCD, KT2MCCD,KT3MCGCD, KT3MCCD
+                        ,KT4MCGCD, KT4MCCD, KT5MCGCD, KT5MCCD, KT6MCGCD, KT6MCCD
+                    from {mpSchema}.m0510 m
+                    join (
+                        select HMCD, KTSEQ, max(VALDTF) AS VALDTF
+                        from {mpSchema}.m0510
+                        where HMCD='{hmcd}' and KTCD like 'MP%' and ODCD like '6060%' and JIKBN = '1'
+                        group by HMCD, KTSEQ
+                    ) x on m.HMCD = x.HMCD AND m.VALDTF = x.VALDTF and m.KTSEQ = x.KTSEQ
+                    inner join KM8430 km on km.HMCD = m.HMCD
+                    order by m.KTSEQ limit 1
+                ";
+                using MySqlCommand cmd = new(sql, mpCnn);
+                using MySqlDataReader reader = cmd.ExecuteReader();
+                reader.Read();  // 1行だけあればいいかな
+                int ktseq = reader.GetInt32("KTSEQ");
+                string ktcd = reader.GetString("KTCD");
+                string odcd = reader.GetString("ODCD");
+                int lttime = reader.GetInt32("ODRLT");                  // M0520.ODRLT：製造購買LT
+                string wknote = reader.IsDBNull(reader.GetOrdinal("WKNOTE")) ? ""
+                    : reader.GetString(reader.GetOrdinal("WKNOTE"));
+                string wkcomment = reader.IsDBNull(reader.GetOrdinal("WKCOMMENT")) ? ""
+                    : reader.GetString("WKCOMMENT");
+                // 配列に格納
+                int ktsu = reader.GetInt32("KTSU");
+                string[] mcgcd = new string[ktsu];
+                string[] mccd = new string[ktsu];
+                for (int i = 0; i < ktsu; i++)
+                {
+                    mcgcd[i] = reader.GetString($"KT{i + 1}MCGCD");
+                    mccd[i] = reader.GetString($"KT{i + 1}MCCD");
+                }
+                reader.Close();
+
+                // ②同月処理（完了予定日を翌営業日にスライドして差分を登録）
+                if (targetyymm == lastyymm)
+                {
+                    eddt = GetNextWorkDay(mpSchema, ref mpCnn, hmcd, eddt);
+                    odrqty -= lastqty;
+                }
+
+                // ②KD8430:切削手配ファイルの登録
+                insertSQL = InsertMpOrderSQL(newOdrno, ktseq, hmcd, ktcd, odrqty, odcd, lttime, eddt, wknote, wkcomment);
+                cmd.CommandText = insertSQL;
+                int insertCount = cmd.ExecuteNonQuery();
+
+                // ③KD8450:切削オーダーファイルの登録（各設備毎に分解）
+                for (int mpseq = 1; mpseq <= ktsu; mpseq++)
+                { 
+                    insertSQL = DivideMpOrderSQL(newOdrno, mpseq, mcgcd[mpseq - 1], mccd[mpseq - 1], hmcd, eddt, odrqty);
+                    cmd.CommandText = insertSQL;
+                    cmd.ExecuteNonQuery();
+                }
+
                 ret = true;
             }
-            catch (Exception ex)
+            catch
             {
-                Console.WriteLine(ex.Message);
+                $"手配登録に失敗しました\n{insertSQL}".ConsoleWriteLinePadded();
             }
             return ret;
         }
+        /// <summary>
+        /// SQL 構文編集 (KD8430 切削手配ファイル) 
+        /// </summary>
+        /// <returns>SQL 構文</returns>
+        private static string InsertMpOrderSQL(string newOdrno, int ktseq, string hmcd, string ktcd, decimal odrqty, string odcd, int lttime
+            , DateTime eddt, string wknote, string wkcomment)
+        {
+            wknote = string.IsNullOrEmpty(wknote) ? "null" : "'" + wknote + "'";
+            wkcomment = string.IsNullOrEmpty(wkcomment) ? "null" : "'" + wkcomment + "'";
+            string sql = $@"insert into kd8430 (
+                ODRNO,KTSEQ,HMCD,KTCD,ODRQTY,
+                ODCD,NEXTODCD,LTTIME,STDT,STTIM,
+                EDDT,EDTIM,ODRSTS,QRCD,JIQTY,
+                DENPYOKBN,DENPYODT,NOTE,WKNOTE,WKCOMMENT,
+                DATAKBN,INSTID,INSTDT,UPDTID,UPDTDT,
+                UKCD,NAIGAIKBN,RETKTCD,MPCARDDT,MPINSTID,
+                MPUPDTID) values (
+                '{newOdrno}',{ktseq},'{hmcd}','{ktcd}',{odrqty},
+                '{odcd}',null,{lttime},null,null,
+                '{eddt}','08:10','2',null,0,
+                '1',null,null, {wknote} ,{wkcomment},
+                '1','YAKAN','{DateTime.Now}','YAKAN','{DateTime.Now}',
+                '','1','{ktcd}',null,'YAKAN',
+                'YAKAN')";
+            return sql;
+        }
+        /// <summary>
+        /// SQL 構文編集 (KD8450 切削オーダーファイル) 
+        /// </summary>
+        /// <returns>SQL 構文</returns>
+        private static string DivideMpOrderSQL(string newOdrno, int mpseq, string mcgcd, string mccd, string hmcd, DateTime eddt, decimal odrqty)
+        {
+            string sql = $@"insert into kd8450 (
+                ODRNO,MPSEQ,MCGCD,MCCD,HMCD,
+                EDDT,ODRQTY,JIQTY,ODRSTS,MPINSTID,
+                MPUPDTID) values (
+                '{newOdrno}',{mpseq},'{mcgcd}','{mccd}','{hmcd}',
+                '{eddt}',{odrqty},0,'2','YAKAN',
+                'YAKAN')";
+            return sql;
+        }
+
+        // 翌稼働日の取得
+        public static DateTime GetNextWorkDay(string? mpSchema, ref MySqlConnection? mpCnn, string hmcd, DateTime eddt)
+        {
+            var sql = @$"
+                select min(YMD) from {mpSchema}.s0820 where caltyp='00001' and wkkbn='1' and YMD >
+                    (select max(eddt) from kd8430 where HMCD = '{hmcd}' and eddt >= '{eddt}')";
+            using MySqlCommand cmd = new(sql, mpCnn);
+            return (DateTime)cmd.ExecuteScalar();
+        }
+
+
+
+
+
 
 
 
