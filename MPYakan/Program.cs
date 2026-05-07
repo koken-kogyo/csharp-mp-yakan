@@ -159,7 +159,7 @@ namespace MPYakan
             if (targetDt.Rows.Count == 0) return 0;
 
             // ④採番
-            string odrno = DBManager_MySQL.GetLastOrderNo(mpSchema, ref mpCnn); // YYMM000000
+            string odrno = DBManager_MySQL.GetLastOrderNo(mpSchema, ref mpCnn); // YYMM900000
             if (odrno == "") return -1;
             string yymm = odrno[..4];
             int seq = int.Parse(odrno.Substring(4, 6));
@@ -210,18 +210,14 @@ namespace MPYakan
                     // ⑤内示受注を切削手配ファイルに登録
                     seq++;
                     string newOdrno = $"{yymm}{seq:000000}";
-                    if (DBManager_MySQL.InsertKD8430KD8450(mpSchema, ref mpCnn, row, newOdrno, targetyymm, lastyymm, lastqty, productkbn))
+                    if (DBManager_MySQL.InsertKD8430KD8450(mpSchema, ref mpCnn, row, ref seq, newOdrno, targetyymm, lastyymm, lastqty, productkbn))
                     {
                         insertCnt++;
                     }
-                    /*
-
-                    （追加機能予定）
-                    　生産区分が「２：内示平準」の場合、内示数を４週に分割して週の初めに登録
-
-                    */
-
-
+                    else
+                    {
+                        throw new Exception();
+                    }
                 }
                 // ⑥内示生産管理ファイルを更新
                 if (updateCnt > 0)

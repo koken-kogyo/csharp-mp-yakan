@@ -519,8 +519,9 @@ namespace MPYakan
         /// </summary>
         /// <param name="row">登録データ</param>
         /// <returns>登録件数</returns>
-        public static bool InsertKD8430KD8450(string? mpSchema, ref MySqlConnection? mpCnn, DataRow row, string newOdrno,
-            string targetyymm, string lastyymm, decimal lastqty, string productkbn)
+        public static bool InsertKD8430KD8450(string? mpSchema, ref MySqlConnection? mpCnn, DataRow row
+            , ref int seq, string newOdrno
+            , string targetyymm, string lastyymm, decimal lastqty, string productkbn)
         {
             bool ret = false;
             string insertSQL = "";
@@ -574,17 +575,44 @@ namespace MPYakan
                     odrqty -= lastqty;
                 }
 
-                // ②KD8430:切削手配ファイルの登録
-                insertSQL = InsertMpOrderSQL(newOdrno, ktseq, hmcd, ktcd, odrqty, odcd, lttime, eddt, wknote, wkcomment);
+                // ③KD8430:切削手配ファイルの登録
+                if (productkbn == "3")
+                {
+                    insertSQL = InsertMpOrderSQL(newOdrno, ktseq, hmcd, ktcd, odrqty, odcd, lttime, eddt, wknote, wkcomment);
+                }
+                // 生産区分が「２：内示平準」の場合、内示数を４週に分割して週の初めに登録
+                else if (productkbn == "2")
+                {
+                    insertSQL = InsertMpDivideOrderSQL(newOdrno, ktseq, hmcd, ktcd, odrqty, odcd, lttime, eddt, wknote, wkcomment);
+                }
+                else
+                {
+                    throw new Exception("正しい生産区分を設定してください");
+                }
                 cmd.CommandText = insertSQL;
                 int insertCount = cmd.ExecuteNonQuery();
 
-                // ③KD8450:切削オーダーファイルの登録（各設備毎に分解）
+                // ④KD8450:切削オーダーファイルの登録（各設備毎に分解）
                 for (int mpseq = 1; mpseq <= ktsu; mpseq++)
-                { 
-                    insertSQL = DivideMpOrderSQL(newOdrno, mpseq, mcgcd[mpseq - 1], mccd[mpseq - 1], hmcd, eddt, odrqty);
-                    cmd.CommandText = insertSQL;
-                    cmd.ExecuteNonQuery();
+                {
+                    // 今作ではXT工程のみでトライ
+                    if (mcgcd[mpseq - 1] == "XT" && mccd[mpseq - 1] == "XT")
+                    {
+                        mccd[mpseq - 1] = "XT2";
+
+                        if (productkbn == "3")
+                        {
+                            insertSQL = DivideMpOrderSQL(newOdrno, mpseq, mcgcd[mpseq - 1], mccd[mpseq - 1], hmcd, eddt, odrqty);
+                        }
+                        // 生産区分が「２：内示平準」の場合、内示数を４週に分割して週の初めに登録
+                        else if (productkbn == "2")
+                        {
+                            insertSQL = DivideMpDivideOrderSQL(newOdrno, mpseq, mcgcd[mpseq - 1], mccd[mpseq - 1], hmcd, eddt, odrqty);
+                            seq += 3; // ここまで来てから呼び出し元の変数値を操作
+                        }
+                        cmd.CommandText = insertSQL;
+                        cmd.ExecuteNonQuery();
+                    }
                 }
 
                 ret = true;
@@ -622,6 +650,58 @@ namespace MPYakan
             return sql;
         }
         /// <summary>
+        /// SQL 構文編集 (KD8430 切削手配ファイル) 
+        /// </summary>
+        /// <returns>SQL 構文</returns>
+        private static string InsertMpDivideOrderSQL(string newOdrno, int ktseq, string hmcd, string ktcd, decimal odrqty, string odcd, int lttime
+            , DateTime eddt, string wknote, string wkcomment)
+        {
+            wknote = string.IsNullOrEmpty(wknote) ? "null" : "'" + wknote + "'";
+            wkcomment = string.IsNullOrEmpty(wkcomment) ? "null" : "'" + wkcomment + "'";
+
+            // 月の初めの月曜日を取得
+            DateTime d = new DateTime(DateTime.Now.Year, DateTime.Now.Month, 1);
+            d = d.AddDays(((int)DayOfWeek.Monday - (int)d.DayOfWeek + 7) % 7);
+
+            string yymm = newOdrno[..4];
+            int q = int.Parse(newOdrno.Substring(4, 6));
+
+            string sql = $@"insert into kd8430 (
+                ODRNO,KTSEQ,HMCD,KTCD,ODRQTY,
+                ODCD,NEXTODCD,LTTIME,STDT,STTIM,
+                EDDT,EDTIM,ODRSTS,QRCD,JIQTY,
+                DENPYOKBN,DENPYODT,NOTE,WKNOTE,WKCOMMENT,
+                DATAKBN,INSTID,INSTDT,UPDTID,UPDTDT,
+                UKCD,NAIGAIKBN,RETKTCD,MPCARDDT,MPINSTID,
+                MPUPDTID) values 
+                ('{yymm}{q:000000}',{ktseq},'{hmcd}','{ktcd}',{Math.Floor(odrqty / 4)},
+                '{odcd}',null,{lttime},null,null,
+                '{d}','08:10','2',null,0,
+                '1',null,null, {wknote} ,{wkcomment},
+                '1','YAKAN','{DateTime.Now}','YAKAN','{DateTime.Now}',
+                '','1','{ktcd}',null,'YAKAN','YAKAN'),
+                ('{yymm}{q+1:000000}',{ktseq},'{hmcd}','{ktcd}',{Math.Floor(odrqty / 4)},
+                '{odcd}',null,{lttime},null,null,
+                '{d.AddDays(7)}','08:10','2',null,0,
+                '1',null,null, {wknote} ,{wkcomment},
+                '1','YAKAN','{DateTime.Now}','YAKAN','{DateTime.Now}',
+                '','1','{ktcd}',null,'YAKAN','YAKAN'),
+                ('{yymm}{q+2:000000}',{ktseq},'{hmcd}','{ktcd}',{Math.Floor(odrqty / 4)},
+                '{odcd}',null,{lttime},null,null,
+                '{d.AddDays(14)}','08:10','2',null,0,
+                '1',null,null, {wknote} ,{wkcomment},
+                '1','YAKAN','{DateTime.Now}','YAKAN','{DateTime.Now}',
+                '','1','{ktcd}',null,'YAKAN','YAKAN'),
+                ('{yymm}{q+3:000000}',{ktseq},'{hmcd}','{ktcd}',{Math.Floor(odrqty / 4)},
+                '{odcd}',null,{lttime},null,null,
+                '{d.AddDays(21)}','08:10','2',null,0,
+                '1',null,null, {wknote} ,{wkcomment},
+                '1','YAKAN','{DateTime.Now}','YAKAN','{DateTime.Now}',
+                '','1','{ktcd}',null,'YAKAN','YAKAN')
+            ";
+            return sql;
+        }
+        /// <summary>
         /// SQL 構文編集 (KD8450 切削オーダーファイル) 
         /// </summary>
         /// <returns>SQL 構文</returns>
@@ -634,6 +714,34 @@ namespace MPYakan
                 '{newOdrno}',{mpseq},'{mcgcd}','{mccd}','{hmcd}',
                 '{eddt}',{odrqty},0,'2','YAKAN',
                 'YAKAN')";
+            return sql;
+        }
+        /// <summary>
+        /// SQL 構文編集 (KD8450 切削オーダーファイル) 
+        /// </summary>
+        /// <returns>SQL 構文</returns>
+        private static string DivideMpDivideOrderSQL(string newOdrno, int mpseq, string mcgcd, string mccd, string hmcd, DateTime eddt, decimal odrqty)
+        {
+            // 月の初めの月曜日を取得
+            DateTime d = new DateTime(DateTime.Now.Year, DateTime.Now.Month, 1);
+            d = d.AddDays(((int)DayOfWeek.Monday - (int)d.DayOfWeek + 7) % 7);
+
+            string yymm = newOdrno[..4];
+            int q = int.Parse(newOdrno.Substring(4, 6));
+
+            string sql = $@"insert into kd8450 (
+                ODRNO,MPSEQ,MCGCD,MCCD,HMCD,
+                EDDT,ODRQTY,JIQTY,ODRSTS,MPINSTID,
+                MPUPDTID) values 
+                ('{yymm}{q:000000}',{mpseq},'{mcgcd}','{mccd}','{hmcd}',
+                '{d}',{Math.Floor(odrqty / 4)},0,'2','YAKAN','YAKAN'),
+                ('{yymm}{q+1:000000}',{mpseq},'{mcgcd}','{mccd}','{hmcd}',
+                '{d.AddDays(7)}',{Math.Floor(odrqty / 4)},0,'2','YAKAN','YAKAN'),
+                ('{yymm}{q+2:000000}',{mpseq},'{mcgcd}','{mccd}','{hmcd}',
+                '{d.AddDays(14)}',{Math.Floor(odrqty / 4)},0,'2','YAKAN','YAKAN'),
+                ('{yymm}{q+3:000000}',{mpseq},'{mcgcd}','{mccd}','{hmcd}',
+                '{d.AddDays(21)}',{Math.Floor(odrqty / 4)},0,'2','YAKAN','YAKAN')
+            ";
             return sql;
         }
 
