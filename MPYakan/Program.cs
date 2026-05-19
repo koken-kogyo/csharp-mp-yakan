@@ -159,7 +159,7 @@ namespace MPYakan
             if (targetDt.Rows.Count == 0) return 0;
 
             // ④採番
-            string odrno = DBManager_MySQL.GetLastOrderNo(mpSchema, ref mpCnn); // YYMM900000
+            string odrno = DBManager_MySQL.GetLastNaijiNo(mpSchema, ref mpCnn); // YYMM900000
             if (odrno == "") return -1;
             string yymm = odrno[..4];
             int seq = int.Parse(odrno.Substring(4, 6));
@@ -179,6 +179,7 @@ namespace MPYakan
                     string targetyymm = (string)row["TARGETYYMM"];
                     int yyyy = int.Parse(targetyymm[..4]);
                     int mm = int.Parse(targetyymm.Substring(5, 2));
+                    DateTime nextmonth = new DateTime(yyyy, mm, 1).AddMonths(1); // 差分を翌月に集約
                     decimal qty = (decimal)row["JUQTY"];
                     var r = KD8500.AsEnumerable()
                         .FirstOrDefault(r =>
@@ -195,10 +196,35 @@ namespace MPYakan
                         lastyymm = r.Field<string>("LASTYYMM") ?? "1900/01";
                         productkbn = r.Field<string>("PDTKBN") ?? "1";
                         if (lastyymm == targetyymm && lastqty == qty) continue; // 前回内示から変化なしの場合次の品番へ
-                        r["LASTDT"] = row["LASTDT"];                // 前回登録日時
-                        r["LASTYYMM"] = targetyymm;                 // 前回対象月
-                        r["LASTQTY"] = qty;                         // 前回内示数
-                        r[$"M{mm:00}"] = qty;                       // 内示数
+                        r["LASTYYMM"] = targetyymm;                 // 今回対象月
+                        r["LASTDT"] = row["LASTDT"];                // 今回最新登録日時
+                        if (lastyymm != targetyymm)
+                        {
+                            // 内示生産管理ファイルの値変更
+                            r["UPDCNT"] = 0;                        // 更新回数
+                            r["LASTQTY"] = qty;                     // 前回内示
+                            r[$"M{mm:00}"] = qty;                   // 内示数
+
+                            // ⑤内示受注を切削手配ファイルに登録
+                            seq++;
+                            string newOdrno = $"{yymm}{seq:000000}";
+                            if (DBManager_MySQL.InsertKD8430KD8450(mpSchema, ref mpCnn, row, ref seq, newOdrno, targetyymm, lastyymm, lastqty, productkbn))
+                            {
+                                insertCnt++;
+                            }
+                            else
+                            {
+                                throw new Exception();
+                            }
+                        }
+                        else
+                        {
+                            int nextmm = nextmonth.Month;
+                            int nextqty = (int)r[$"M{nextmm:00}"];
+                            r["UPDCNT"] = (int)r["UPDCNT"] + 1;
+                            r["LASTQTY"] = qty;                     // 前回内示
+                            r[$"M{nextmm:00}"] = nextqty + qty - lastqty;     // 差分は翌月の内示数
+                        }
                         r["UPDTDT"] = DateTime.Now;                 // 更新日時
                         updateCnt++;
                     }
@@ -207,17 +233,6 @@ namespace MPYakan
                         continue;
                     }
 
-                    // ⑤内示受注を切削手配ファイルに登録
-                    seq++;
-                    string newOdrno = $"{yymm}{seq:000000}";
-                    if (DBManager_MySQL.InsertKD8430KD8450(mpSchema, ref mpCnn, row, ref seq, newOdrno, targetyymm, lastyymm, lastqty, productkbn))
-                    {
-                        insertCnt++;
-                    }
-                    else
-                    {
-                        throw new Exception();
-                    }
                 }
                 // ⑥内示生産管理ファイルを更新
                 if (updateCnt > 0)

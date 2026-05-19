@@ -216,13 +216,13 @@ namespace MPYakan
                     {bomValue}{oyaValue}
                 )
                 select p.HMCD,max(d30.INSTDT) as LASTDT,
-                    case when to_number(to_char(SYSDATE,'DD'))<15
+                    case when to_number(to_char(SYSDATE,'DD'))<13
                         then case when d30.TKCD not in ('C3001','C2105') 
-                            then to_char(SYSDATE,'YYYY/MM')
-                            else to_char(add_months(SYSDATE,1),'YYYY/MM') end
+                            then to_char(add_months(SYSDATE,0),'YYYY/MM')
+                            else to_char(add_months(SYSDATE,0),'YYYY/MM') end
                         else case when d30.TKCD not in ('C3001','C2105') 
                             then to_char(add_months(SYSDATE,1),'YYYY/MM')
-                            else to_char(add_months(SYSDATE,2),'YYYY/MM') end
+                            else to_char(add_months(SYSDATE,1),'YYYY/MM') end
                     end as TARGETYYMM, 
                     min(d30.JUDT) as JUDT,
                     sum(d30.JUQTY) as JUQTY
@@ -230,31 +230,31 @@ namespace MPYakan
                     inner join VPARTS p on p.PART=v.KOHMCD
                     inner join {emSchema}.D0030 d30 on d30.HMCD=v.OYAHMCD
                 where d30.JUDT between
-                    case when to_number(to_char(SYSDATE,'DD'))<15
+                    case when to_number(to_char(SYSDATE,'DD'))<13
                         then case when d30.TKCD not in ('C3001','C2105') 
-                            then trunc(SYSDATE,'MONTH')
-                            else add_months(trunc(SYSDATE,'MONTH'),1) end
+                            then add_months(trunc(SYSDATE,'MONTH'),0)
+                            else add_months(trunc(SYSDATE,'MONTH'),0) end
                         else case when d30.TKCD not in ('C3001','C2105') 
                             then add_months(trunc(SYSDATE,'MONTH'),1)
-                            else add_months(trunc(SYSDATE,'MONTH'),2) end
+                            else add_months(trunc(SYSDATE,'MONTH'),1) end
                     end and
-                    case when to_number(to_char(SYSDATE,'DD'))<15
+                    case when to_number(to_char(SYSDATE,'DD'))<13
                         then case when d30.TKCD not in ('C3001','C2105') 
-                            then last_day(SYSDATE)
-                            else last_day(add_months(SYSDATE,1)) end
+                            then last_day(add_months(SYSDATE,0))
+                            else last_day(add_months(SYSDATE,0)) end
                         else case when d30.TKCD not in ('C3001','C2105')
                             then last_day(add_months(SYSDATE,1))
-                            else last_day(add_months(SYSDATE,2)) end
+                            else last_day(add_months(SYSDATE,1)) end
                     end
                     and ((d30.CHK<>'43' AND d30.CHK<>'100') OR d30.CHK IS NULL)
                 group by p.HMCD,
-                    case when to_number(to_char(SYSDATE,'DD'))<15
+                    case when to_number(to_char(SYSDATE,'DD'))<13
                         then case when d30.TKCD not in ('C3001','C2105') 
-                            then to_char(SYSDATE,'YYYY/MM')
-                            else to_char(add_months(SYSDATE,1),'YYYY/MM') end
+                            then to_char(add_months(SYSDATE,0),'YYYY/MM')
+                            else to_char(add_months(SYSDATE,0),'YYYY/MM') end
                         else case when d30.TKCD not in ('C3001','C2105') 
                             then to_char(add_months(SYSDATE,1),'YYYY/MM')
-                            else to_char(add_months(SYSDATE,2),'YYYY/MM') end
+                            else to_char(add_months(SYSDATE,1),'YYYY/MM') end
                     end
                 having 
                     max(d30.INSTDT)>max(p.LASTDT)
@@ -264,6 +264,55 @@ namespace MPYakan
             return true;
         }
 
+        /*
+         * C3001：ティエラ、C2105：ﾔﾝﾏｰ塚口は内示の仕様が違うので調査中
+
+                        select p.HMCD,max(d30.INSTDT) as LASTDT,
+                            case when to_number(to_char(SYSDATE,'DD'))<15
+                                then case when d30.TKCD not in ('C3001','C2105') 
+                                    then to_char(SYSDATE,'YYYY/MM')
+                                    else to_char(add_months(SYSDATE,1),'YYYY/MM') end
+                                else case when d30.TKCD not in ('C3001','C2105') 
+                                    then to_char(add_months(SYSDATE,1),'YYYY/MM')
+                                    else to_char(add_months(SYSDATE,2),'YYYY/MM') end
+                            end as TARGETYYMM, 
+                            min(d30.JUDT) as JUDT,
+                            sum(d30.JUQTY) as JUQTY
+                        from VBOM v
+                            inner join VPARTS p on p.PART=v.KOHMCD
+                            inner join {emSchema}.D0030 d30 on d30.HMCD=v.OYAHMCD
+                        where d30.JUDT between
+                            case when to_number(to_char(SYSDATE,'DD'))<15
+                                then case when d30.TKCD not in ('C3001','C2105') 
+                                    then trunc(SYSDATE,'MONTH')
+                                    else add_months(trunc(SYSDATE,'MONTH'),1) end
+                                else case when d30.TKCD not in ('C3001','C2105') 
+                                    then add_months(trunc(SYSDATE,'MONTH'),1)
+                                    else add_months(trunc(SYSDATE,'MONTH'),2) end
+                            end and
+                            case when to_number(to_char(SYSDATE,'DD'))<15
+                                then case when d30.TKCD not in ('C3001','C2105') 
+                                    then last_day(SYSDATE)
+                                    else last_day(add_months(SYSDATE,1)) end
+                                else case when d30.TKCD not in ('C3001','C2105')
+                                    then last_day(add_months(SYSDATE,1))
+                                    else last_day(add_months(SYSDATE,2)) end
+                            end
+                            and ((d30.CHK<>'43' AND d30.CHK<>'100') OR d30.CHK IS NULL)
+                        group by p.HMCD,
+                            case when to_number(to_char(SYSDATE,'DD'))<15
+                                then case when d30.TKCD not in ('C3001','C2105') 
+                                    then to_char(SYSDATE,'YYYY/MM')
+                                    else to_char(add_months(SYSDATE,1),'YYYY/MM') end
+                                else case when d30.TKCD not in ('C3001','C2105') 
+                                    then to_char(add_months(SYSDATE,1),'YYYY/MM')
+                                    else to_char(add_months(SYSDATE,2),'YYYY/MM') end
+                            end
+                        having 
+                            max(d30.INSTDT)>max(p.LASTDT)
+
+
+         */
 
 
     }

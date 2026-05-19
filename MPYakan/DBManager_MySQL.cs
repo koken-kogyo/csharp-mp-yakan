@@ -235,7 +235,7 @@ namespace MPYakan
                         $"select '{targetDate}' " +
                         ",ODRNO,HMCD,ODRQTY,JIQTY,ODRSTS,EDDT,EDTIM,'YAKAN',now() " +
                         "from " + mpSchema + ".kd8430 " +
-                        "where ODRSTS in ('1','2','3') and " +
+                        "where ODRSTS in ('1','2','3') and ODCD like '6060%' and " +
                         $"eddt between date_add(now(), interval -1 month) and '{targetDate}'"
                     ;
                     using (MySqlCommand myCmd = new(sql, mpCnn))
@@ -492,13 +492,13 @@ namespace MPYakan
             return adapter.Update(KD8500);
         }
 
-        // 最終手配Noを取得
-        public static string GetLastOrderNo(string? mpSchema, ref MySqlConnection? mpCnn)
+        // 最終内示手配Noを取得
+        public static string GetLastNaijiNo(string? mpSchema, ref MySqlConnection? mpCnn)
         {
             var sql = @$"
-                select ifnull(max(odrno),
-                    concat(date_format(now() - interval 0 month, '%y'), date_format(now() - interval 0 month, '%m'), '900000')) as odrno
-                from {mpSchema}.kd8430 where odrno between
+                select ifnull(max(ODRNO),
+                    concat(date_format(now() - interval 0 month, '%y'), date_format(now() - interval 0 month, '%m'), '900000')) as ODRNO
+                from {mpSchema}.kd8430 where ODCD = '60699' and ODRNO between
                     concat(date_format(now() - interval 0 month, '%y'), date_format(now() - interval 0 month, '%m'), '900000') and
                     concat(date_format(now() - interval 0 month, '%y'), date_format(now() - interval 0 month, '%m'), '999999')";
             // Debug用に interval 0 は残しておく（-1でテストは行う）
@@ -551,7 +551,12 @@ namespace MPYakan
                 reader.Read();  // 1行だけあればいいかな
                 int ktseq = reader.GetInt32("KTSEQ");
                 string ktcd = reader.GetString("KTCD");
-                string odcd = reader.GetString("ODCD");
+                
+                
+                // 内示生産専用のコード"60699"に変換
+                string odcd = "60699"; // reader.GetString("ODCD");
+                
+
                 int lttime = reader.GetInt32("ODRLT");                  // M0520.ODRLT：製造購買LT
                 string wknote = reader.IsDBNull(reader.GetOrdinal("WKNOTE")) ? ""
                     : reader.GetString(reader.GetOrdinal("WKNOTE"));
@@ -568,12 +573,12 @@ namespace MPYakan
                 }
                 reader.Close();
 
-                // ②同月処理（完了予定日を翌営業日にスライドして差分を登録）
-                if (targetyymm == lastyymm)
-                {
-                    eddt = GetNextWorkDay(mpSchema, ref mpCnn, hmcd, eddt);
-                    odrqty -= lastqty;
-                }
+                //// ②同月処理（完了予定日を翌営業日にスライドして差分を登録）
+                //if (targetyymm == lastyymm)
+                //{
+                //    eddt = GetNextWorkDay(mpSchema, ref mpCnn, hmcd, eddt, productkbn);
+                //    odrqty -= lastqty;
+                //}
 
                 // ③KD8430:切削手配ファイルの登録
                 if (productkbn == "3")
@@ -660,7 +665,7 @@ namespace MPYakan
             wkcomment = string.IsNullOrEmpty(wkcomment) ? "null" : "'" + wkcomment + "'";
 
             // 月の初めの月曜日を取得
-            DateTime d = new DateTime(DateTime.Now.Year, DateTime.Now.Month, 1);
+            DateTime d = new DateTime(eddt.Year, eddt.Month, 1);
             d = d.AddDays(((int)DayOfWeek.Monday - (int)d.DayOfWeek + 7) % 7);
 
             string yymm = newOdrno[..4];
@@ -723,7 +728,7 @@ namespace MPYakan
         private static string DivideMpDivideOrderSQL(string newOdrno, int mpseq, string mcgcd, string mccd, string hmcd, DateTime eddt, decimal odrqty)
         {
             // 月の初めの月曜日を取得
-            DateTime d = new DateTime(DateTime.Now.Year, DateTime.Now.Month, 1);
+            DateTime d = new DateTime(eddt.Year, eddt.Month, 1);
             d = d.AddDays(((int)DayOfWeek.Monday - (int)d.DayOfWeek + 7) % 7);
 
             string yymm = newOdrno[..4];
@@ -746,13 +751,25 @@ namespace MPYakan
         }
 
         // 翌稼働日の取得
-        public static DateTime GetNextWorkDay(string? mpSchema, ref MySqlConnection? mpCnn, string hmcd, DateTime eddt)
+        public static DateTime GetNextWorkDay(string? mpSchema, ref MySqlConnection? mpCnn, string hmcd, DateTime eddt, string productkbn)
         {
-            var sql = @$"
+            string sql;
+            if (productkbn == "2")
+            {
+                sql = @$"
+                select min(YMD) from {mpSchema}.s0820 where caltyp='00001' and wkkbn='1' and YMD > '{eddt}'
+                ";
+            }
+            else
+            {
+                sql = @$"
                 select min(YMD) from {mpSchema}.s0820 where caltyp='00001' and wkkbn='1' and YMD >
-                    (select max(eddt) from kd8430 where HMCD = '{hmcd}' and eddt >= '{eddt}')";
+                    (select max(eddt) from kd8430 where HMCD = '{hmcd}' and eddt >= '{eddt}' and ODCD = '60699')
+                ";
+            }
             using MySqlCommand cmd = new(sql, mpCnn);
-            return (DateTime)cmd.ExecuteScalar();
+            var result = cmd.ExecuteScalar();
+            return (result != null) ? (DateTime)result : eddt;
         }
 
 
