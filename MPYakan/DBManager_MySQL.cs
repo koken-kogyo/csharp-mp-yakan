@@ -580,43 +580,47 @@ namespace MPYakan
                 //    odrqty -= lastqty;
                 //}
 
-                // ③KD8430:切削手配ファイルの登録
-                if (productkbn == "3")
+                // 今作ではXT工程のみでトライ
+                if (mcgcd.Contains("XT") && mccd.Contains("XT"))
                 {
-                    insertSQL = InsertMpOrderSQL(newOdrno, ktseq, hmcd, ktcd, odrqty, odcd, lttime, eddt, wknote, wkcomment);
-                }
-                // 生産区分が「２：内示平準」の場合、内示数を４週に分割して週の初めに登録
-                else if (productkbn == "2")
-                {
-                    insertSQL = InsertMpDivideOrderSQL(newOdrno, ktseq, hmcd, ktcd, odrqty, odcd, lttime, eddt, wknote, wkcomment);
-                }
-                else
-                {
-                    throw new Exception("正しい生産区分を設定してください");
-                }
-                cmd.CommandText = insertSQL;
-                int insertCount = cmd.ExecuteNonQuery();
-
-                // ④KD8450:切削オーダーファイルの登録（各設備毎に分解）
-                for (int mpseq = 1; mpseq <= ktsu; mpseq++)
-                {
-                    // 今作ではXT工程のみでトライ
-                    if (mcgcd[mpseq - 1] == "XT" && mccd[mpseq - 1] == "XT")
+                    // ③KD8430:切削手配ファイルの登録
+                    if (productkbn == "3")
                     {
-                        mccd[mpseq - 1] = "XT2";
+                        insertSQL = InsertMpOrderSQL(newOdrno, ktseq, hmcd, ktcd, odrqty, odcd, lttime, eddt, wknote, wkcomment);
+                    }
+                    // 生産区分が「２：内示平準」の場合、内示数を４週に分割して週の初めに登録
+                    else if (productkbn == "2")
+                    {
+                        insertSQL = InsertMpDivideOrderSQL(newOdrno, ktseq, hmcd, ktcd, odrqty, odcd, lttime, eddt, wknote, wkcomment);
+                    }
+                    else
+                    {
+                        throw new Exception("正しい生産区分を設定してください");
+                    }
+                    cmd.CommandText = insertSQL;
+                    int insertCount = cmd.ExecuteNonQuery();
 
-                        if (productkbn == "3")
+                    // ④KD8450:切削オーダーファイルの登録（各設備毎に分解）
+                    for (int mpseq = 1; mpseq <= ktsu; mpseq++)
+                    {
+                        // XT-XT2に変換
+                        if (mcgcd[mpseq - 1] == "XT" && mccd[mpseq - 1] == "XT")
                         {
-                            insertSQL = DivideMpOrderSQL(newOdrno, mpseq, mcgcd[mpseq - 1], mccd[mpseq - 1], hmcd, eddt, odrqty);
+                            mccd[mpseq - 1] = "XT2";
+
+                            if (productkbn == "3")
+                            {
+                                insertSQL = DivideMpOrderSQL(newOdrno, mpseq, mcgcd[mpseq - 1], mccd[mpseq - 1], hmcd, eddt, odrqty);
+                            }
+                            // 生産区分が「２：内示平準」の場合、内示数を４週に分割して週の初めに登録
+                            else if (productkbn == "2")
+                            {
+                                insertSQL = DivideMpDivideOrderSQL(newOdrno, mpseq, mcgcd[mpseq - 1], mccd[mpseq - 1], hmcd, eddt, odrqty);
+                                seq += 3; // ここまで来てから呼び出し元の変数値を操作
+                            }
+                            cmd.CommandText = insertSQL;
+                            cmd.ExecuteNonQuery();
                         }
-                        // 生産区分が「２：内示平準」の場合、内示数を４週に分割して週の初めに登録
-                        else if (productkbn == "2")
-                        {
-                            insertSQL = DivideMpDivideOrderSQL(newOdrno, mpseq, mcgcd[mpseq - 1], mccd[mpseq - 1], hmcd, eddt, odrqty);
-                            seq += 3; // ここまで来てから呼び出し元の変数値を操作
-                        }
-                        cmd.CommandText = insertSQL;
-                        cmd.ExecuteNonQuery();
                     }
                 }
 

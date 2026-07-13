@@ -196,7 +196,7 @@ namespace MPYakan
             );
 
             // ②「構成親区分が"0"」のリストを作成
-            var bomValue = "select * from V_BOM_LEAF_PARENT where KOHMCD in (" +
+            var bomValue = "select OYAHMCD, KOHMCD from V_BOM_LEAF_PARENT where KOHMCD in (" +
                 string.Join(",", partsList.Where(x => x.OyaKbn == "0").Select(x => $"'{x.Part}'")) + ") ";
 
             // ③「構成親区分が"1"」のリストを作成
