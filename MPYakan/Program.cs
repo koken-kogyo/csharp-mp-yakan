@@ -104,6 +104,7 @@ namespace MPYakan
 
 
             // ④内示生産処理
+            /* 2026.07.26 一旦処理廃止
             var sw = Stopwatch.StartNew();
             Console.WriteLine(Common.MSG_SEPARATOR);
             Console.WriteLine("内示生産処理 [kd8500：内示生産管理ファイル]");
@@ -123,7 +124,7 @@ namespace MPYakan
             }
             sw.Stop();
             $"処理時間: {sw.ElapsedMilliseconds} ms".ConsoleWriteLinePadded();
-
+            */
 
 
             // データベースコネクションの削除
