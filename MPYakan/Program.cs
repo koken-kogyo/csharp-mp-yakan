@@ -16,6 +16,7 @@ namespace MPYakan
         private static DataTable calendarDt = new();
         private static DataTable controlDt = new();
         private static DataTable emDt = new();
+        private static DataTable confirmedDt = new();
         // 変数
         private static bool ret = false;
 
@@ -50,6 +51,20 @@ namespace MPYakan
                 Console.WriteLine("EMデータベース異常が発生しました．");
                 Environment.Exit(9);
             }
+
+            // 当日の確定受注に特定の品番が登録されていないかチェック
+            //  R1431-62111-70A(R1411-07534)(SW:R1411-07534-7)
+            //  129H01-59560(SS:129H01-59560-2), 129H01-59570(SS:129H01-59570-2)
+            //  129H01-59560(SS:129H01-59560-2), 129H01-59570(SS:129H01-59570-2)
+            if (!DBManager_Oracle.GetD0010Confirmed(emSchema, ref emCnn, ref confirmedDt))
+            {
+                Console.WriteLine("EMデータベース異常が発生しました．");
+                Environment.Exit(9);
+            }
+
+
+
+            // EM関連の処理終わり
 
 
 
@@ -126,6 +141,22 @@ namespace MPYakan
             $"処理時間: {sw.ElapsedMilliseconds} ms".ConsoleWriteLinePadded();
             */
 
+            // ⑤通知データ登録処理
+            if (confirmedDt.Rows.Count > 0)
+            {
+                Console.WriteLine(Common.MSG_SEPARATOR);
+                Console.WriteLine("通知データ登録 [kd8520：切削通知ファイル]");
+                Console.WriteLine(Common.MSG_SEPARATOR);
+                int insertKD8520Cnt = DBManager_MySQL.InsertKD8520(mpSchema, ref mpCnn, confirmedDt);
+                if (insertKD8520Cnt > 0)
+                {
+                    $"通知データを {insertKD8520Cnt:#,0}件登録しました．".ConsoleWriteLinePadded();
+                }
+                else
+                {
+                    "通知データ登録処理で異常が発生しました．（処理は続行します）".ConsoleWriteLinePadded();
+                }
+            }
 
             // データベースコネクションの削除
             DBManager_Oracle.CloseOraSchema(ref emCnn);

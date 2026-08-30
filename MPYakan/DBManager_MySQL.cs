@@ -2,6 +2,7 @@
 using Microsoft.Extensions.Configuration;
 using MySql.Data.MySqlClient;
 using System.Data;
+using System.Text;
 
 namespace MPYakan
 {
@@ -776,6 +777,121 @@ namespace MPYakan
             return (result != null) ? (DateTime)result : eddt;
         }
 
+
+        /// <summary>
+        /// 通知ファイル登録処理
+        /// </summary>
+        /// <returns>挿入件数</returns>
+        public static int InsertKD8520(string? mpSchema, ref MySqlConnection? mpCnn, DataTable dt)
+        {
+            int ret = -1;
+            string sql;
+            if (mpCnn is null || mpSchema is null)
+            {
+                "MySQL 接続が確立されていません．".ConsoleWriteLinePadded();
+                return ret;
+            }
+
+            // SS工程への通知メッセージ作成（福井化成）
+            var sbSS = new StringBuilder();
+            var targetsSS = new[] { "129H01-59560", "129H01-59570" };
+            var groupsSS = dt.AsEnumerable()
+                .Where(r => targetsSS.Contains(r.Field<string>("HMCD")))
+                .GroupBy(r => r.Field<string>("HMCD")); // HMCD（品番）でグループ化
+            foreach (var g in groupsSS)
+            {
+                string hmcd = (g.Key != null) ? g.Key : "";
+
+                // 日付＋数量のリストを作成
+                var items = g.Select(r =>
+                {
+                    DateTime judt = r.Field<DateTime>("JUDT");
+                    int qty = r.Field<int>("JUQTY");
+
+                    string md = $"{judt.Month}/{judt.Day}";
+                    return $"「{md}、{qty}本」";
+                }).ToList();
+
+                // 1品番分の通知文を生成
+                string line = $"「{hmcd}」{string.Join("", items)}が受注登録されました。EMを確認してください。";
+
+                sbSS.Append(line);
+            }
+            string commentSS = sbSS.ToString();
+
+            // SW工程への通知メッセージ作成（大和精工）
+            var sbSW = new StringBuilder();
+            var targetsSW = new[] { "R1411-07534" };
+            var groupsSW = dt.AsEnumerable()
+                .Where(r => targetsSW.Contains(r.Field<string>("HMCD")))
+                .GroupBy(r => r.Field<string>("HMCD")); // HMCD（品番）でグループ化
+            foreach (var g in groupsSW)
+            {
+                string hmcd = (g.Key != null) ? g.Key : "";
+
+                // 日付＋数量のリストを作成
+                var items = g.Select(r =>
+                {
+                    DateTime judt = r.Field<DateTime>("JUDT");
+                    int qty = r.Field<int>("JUQTY");
+
+                    string md = $"{judt.Month}/{judt.Day}";
+                    return $"「{md}、{qty}本」";
+                }).ToList();
+
+                // 1品番分の通知文を生成
+                string line = $"「{hmcd}」{string.Join("", items)}が受注登録されました。EMを確認してください。";
+
+                sbSW.Append(line);
+            }
+            string commentSW = sbSW.ToString();
+
+            // 通知ファイル登録
+            using (MySqlTransaction txn = mpCnn.BeginTransaction())
+            {
+                try
+                {
+                    var countInsert = 0;
+
+                    // ① SS工程の登録
+                    if (!string.IsNullOrEmpty(commentSS))
+                    {
+                        string sqlSS = $"INSERT INTO {mpSchema}.kd8520 "
+                        + $"(MCGCD, COMMENT) VALUES ('SS', '{commentSS}')";
+                        using (MySqlCommand myCmd = new(sqlSS, mpCnn))
+                        {
+                            countInsert += myCmd.ExecuteNonQuery();
+                        }
+                    }
+
+                    // ② SW工程の登録
+                    if (!string.IsNullOrEmpty(commentSW))
+                    {
+                        string sqlSW = $"INSERT INTO {mpSchema}.kd8520 "
+                        + $"(MCGCD, COMMENT) VALUES ('SW', '{commentSW}')";
+                        using (MySqlCommand myCmd = new(sqlSW, mpCnn))
+                        {
+                            countInsert += myCmd.ExecuteNonQuery();
+                        }
+                    }
+
+                    // ③トランザクションのコミット
+                    txn.Commit();
+
+                    // ④ 戻り値は挿入した件数
+                    ret = countInsert;
+
+                }
+                catch (Exception ex)
+                {
+                    // ⑤ 異常の場合はロールバック
+                    txn.Rollback();
+                    "通知ファイル登録処理はロールバックしました．".ConsoleWriteLinePadded();
+                    Console.WriteLine(ex.Message);
+                }
+            }
+            return ret;
+        }
 
 
 
