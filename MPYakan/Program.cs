@@ -54,6 +54,7 @@ namespace MPYakan
 
             // 当日の確定受注に特定の品番が登録されていないかチェック
             //  R1431-62111-70A(R1411-07534)(SW:R1411-07534-7)
+            //  SW:R1441-62111-7
             //  129H01-59560(SS:129H01-59560-2), 129H01-59570(SS:129H01-59570-2)
             //  129H01-59560(SS:129H01-59560-2), 129H01-59570(SS:129H01-59570-2)
             if (!DBManager_Oracle.GetD0010Confirmed(emSchema, ref emCnn, ref confirmedDt))

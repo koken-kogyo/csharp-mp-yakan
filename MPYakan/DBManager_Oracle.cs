@@ -155,6 +155,7 @@ namespace MPYakan
         /// <summary>
         /// 当日の確定受注に特定の品番が登録された物を検索取得
         ///   大和精工, 得意先品番:R1431-62111-70A, 社内親品番:R1411-07534, SW子品番:R1411-07534-7
+        ///   大和精工, 得意先品番=社内親品番=SW子品番:R1441-62111-7
         ///   福井化成, 得意先品番=社内親品番:129H01-59560, SS子品番:129H01-59560-2
         ///   福井化成, 得意先品番=社内親品番:129H01-59570, SS子品番:129H01-59570-2
         /// </summary>
@@ -170,7 +171,7 @@ namespace MPYakan
                 // 確定受注テーブル（インデックス：IDX_D0010_1=HMCD,TKCTLNO,JUDTを使用して検索）
                 string sql =
                     "select KJUNO, HMCD, JUDT, JUQTY, INSTID, INSTDT from " + emSchema + ".D0010 "
-                    + "where HMCD in ('R1411-07534','129H01-59560','129H01-59570') "
+                    + "where HMCD in ('R1411-07534','R1441-62111-7','129H01-59560','129H01-59570') "
                     + "and JUDT > SYSDATE "
                     + "and INSTDT between TRUNC(SYSDATE) and SYSDATE ";
                 using OracleDataAdapter myDa = new(new OracleCommand(sql, emCnn));

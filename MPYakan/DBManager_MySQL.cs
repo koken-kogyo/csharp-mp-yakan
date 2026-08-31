@@ -821,7 +821,7 @@ namespace MPYakan
 
             // SW工程への通知メッセージ作成（大和精工）
             var sbSW = new StringBuilder();
-            var targetsSW = new[] { "R1411-07534" };
+            var targetsSW = new[] { "R1411-07534", "R1441-62111-7" };
             var groupsSW = dt.AsEnumerable()
                 .Where(r => targetsSW.Contains(r.Field<string>("HMCD")))
                 .GroupBy(r => r.Field<string>("HMCD")); // HMCD（品番）でグループ化
